@@ -41,7 +41,7 @@ func main() {
 	// Inicializa a frota de forma escalável
 	for i := 1; i <= num_drones; i++ {
 		base_drones = append(base_drones, &Drone{
-			ID:     fmt.Sprintf("%s-Drone-%02d", base_id, i),
+			ID:     fmt.Sprintf("Drone_%02d", i),
 			Status: "LIVRE",
 		})
 	}
@@ -51,7 +51,7 @@ func main() {
 		panic(err)
 	}
 	defer ln.Close()
-	fmt.Printf("[%s] Operacional na porta %s com %d drones.\n", base_id, port, num_drones)
+	fmt.Printf("[%s] Operacional com %d drones.\n", base_id, num_drones)
 
 	for {
 		conn, err := ln.Accept()
@@ -110,11 +110,11 @@ func findFreeDrone() *Drone {
 }
 
 func executeMission(d *Drone, cmd DroneCommand) {
-	fmt.Printf("[%s] Decolando para %s a pedido de %s\n", d.ID, cmd.Target, cmd.BrokerID)
+	fmt.Printf("[%s] %s decolando para %s a pedido de %s\n", base_id, d.ID, cmd.Target, cmd.BrokerID)
 	time.Sleep(10 * time.Second) // Simula voo e atendimento
 
 	d.Mutex.Lock()
 	d.Status = "LIVRE" // Simplificado para focar na alocação
 	d.Mutex.Unlock()
-	fmt.Printf("[%s] Retornou e está LIVRE.\n", d.ID)
+	fmt.Printf("[%s] %s retornou e está LIVRE.\n", base_id, d.ID)
 }

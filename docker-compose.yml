@@ -2,20 +2,20 @@ services:
   # ==========================================
   # BASES DE DRONES
   # ==========================================
-  base_norte:
+  base_1:
     build: 
       context: ./base # Aponta para a pasta onde está o Dockerfile da base
-    container_name: base_norte
-    # Executa o binário 'base' com os argumentos: Base_Norte 6000 2
-    command: ./base Base_Norte 6000 2
+    container_name: base_1
+    # Executa o binário 'base' com os argumentos: Base_1 6000 2
+    command: ./base Base_1 6000 2
     ports:
       - "6000:6000"
 
-  base_sul:
+  base_2:
     build:
       context: ./base
-    container_name: base_sul
-    command: ./base Base_Sul 6001 2
+    container_name: base_2
+    command: ./base Base_2 6001 2
     ports:
       - "6001:6001"
 
@@ -28,11 +28,8 @@ services:
     container_name: broker_1
     command: ./broker Setor_1 5001 7001
     environment:
-      - PEERS=Setor_2|broker_2:5002
-      - BASES=base_norte:6000,base_sul:6001
-    depends_on:
-      - base_norte
-      - base_sul
+      - PEERS=Setor_2|broker_2:5002, Setor_3|broker_3:5003, Setor_4|broker_4:5004, Setor_5|broker_5:5005
+      - BASES=base_1:6000,base_2:6001
 
   broker_2:
     build:
@@ -40,11 +37,35 @@ services:
     container_name: broker_2
     command: ./broker Setor_2 5002 7002
     environment:
-      - PEERS=Setor_1|broker_1:5001
-      - BASES=base_norte:6000,base_sul:6001
-    depends_on:
-      - base_norte
-      - base_sul
+      - PEERS=Setor_1|broker_1:5001, Setor_3|broker_3:5003, Setor_4|broker_4:5004, Setor_5|broker_5:5005
+      - BASES=base_1:6000,base_2:6001
+
+  broker_3:
+    build:
+      context: ./broker # Aponta para a pasta do Broker
+    container_name: broker_3
+    command: ./broker Setor_3 5003 7003
+    environment:
+      - PEERS=Setor_1|broker_1:5001, Setor_2|broker_2:5002, Setor_4|broker_4:5004, Setor_5|broker_5:5005
+      - BASES=base_1:6000,base_2:6001
+
+  broker_4:
+    build:
+      context: ./broker # Aponta para a pasta do Broker
+    container_name: broker_4
+    command: ./broker Setor_4 5004 7004
+    environment:
+      - PEERS=Setor_1|broker_1:5001, Setor_2|broker_2:5002, Setor_3|broker_3:5003
+      - BASES=base_1:6000,base_2:6001
+
+  broker_5:
+    build:
+      context: ./broker # Aponta para a pasta do Broker
+    container_name: broker_5
+    command: ./broker Setor_5 5005 7005
+    environment:
+      - PEERS=Setor_1|broker_1:5001, Setor_2|broker_2:5002, Setor_3|broker_3:5003, Setor_4|broker_4:5004
+      - BASES=base_1:6000,base_2:6001   
 
   # ==========================================
   # SENSORES
@@ -54,13 +75,27 @@ services:
       context: ./sensores # Aponta para a pasta dos Sensores
     container_name: sensor_1
     command: ./sensor Setor_1 broker_1:7001
-    depends_on:
-      - broker_1
       
   sensor_2:
     build:
       context: ./sensores # Aponta para a pasta dos Sensores
     container_name: sensor_2
     command: ./sensor Setor_2 broker_2:7002
-    depends_on:
-      - broker_2
+
+  sensor_3:
+    build:
+      context: ./sensores # Aponta para a pasta dos Sensores
+    container_name: sensor_3
+    command: ./sensor Setor_3 broker_3:7003
+
+  sensor_4:
+    build:
+      context: ./sensores # Aponta para a pasta dos Sensores
+    container_name: sensor_4
+    command: ./sensor Setor_4 broker_4:7004
+
+  sensor_5:
+    build:
+      context: ./sensores # Aponta para a pasta dos Sensores
+    container_name: sensor_5
+    command: ./sensor Setor_5 broker_5:7005
