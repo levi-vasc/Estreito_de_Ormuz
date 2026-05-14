@@ -29,8 +29,7 @@ var (
 
 func main() {
 	// Captura configurações via argumentos ou variáveis de ambiente (útil pro Docker)
-	// Exemplo de uso: go run drone_base.go Base_Sul 6000 5
-	if len(os.Args) < 4 {
+	if len(os.Args) < 3 {
 		fmt.Println("Uso: go run drone_base.go <ID_DA_BASE> <PORTA> <QTD_DRONES>")
 		return
 	}
@@ -83,6 +82,16 @@ func handleBrokerRequest(conn net.Conn) {
 				"status":  "REJECTED_NO_DRONES",
 				"base_id": base_id,
 			})
+		}
+	} else if cmd.Action == "STATUS" {
+		for _, d := range base_drones {
+			if d.ID == cmd.Target {
+				d.Mutex.Lock()
+				status := d.Status
+				d.Mutex.Unlock()
+				json.NewEncoder(conn).Encode(map[string]string{"status": status})
+				return
+			}
 		}
 	}
 }

@@ -4,7 +4,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN go mod init sensores
-RUN go build -o sensores
+RUN go mod init sensor
+RUN go build -o sensor
 
-CMD ["./sensores"]
+CMD ["./sensor"]

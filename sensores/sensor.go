@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net"
+	"os"
 	"time"
 )
 
@@ -16,8 +17,8 @@ type SensorEvent struct {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	broker_addr := "localhost:5001" // IP do Broker do seu setor (via Docker ENV)
-	sector_ID := "Setor_Alpha"
+	sector_ID := os.Args[1]
+	broker_addr := os.Args[2]
 
 	eventos_possiveis := []string{"EMBARCACAO_DERIVA", "BLOQUEIO_ROTA", "OBJETO_NAO_IDENTIFICADO"}
 

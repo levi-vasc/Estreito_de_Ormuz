@@ -1,42 +1,46 @@
-version: '3.8'
-
 services:
   # ==========================================
   # BASES DE DRONES
   # ==========================================
   base_norte:
-    build: .
-    # Comando: arquivo, ID_Base, Porta, Qtd_Drones
-    command: ["go", "run", "drone_base.go", "Base_Norte", "6000", "5"]
+    build: 
+      context: ./base # Aponta para a pasta onde está o Dockerfile da base
+    container_name: base_norte
+    # Executa o binário 'base' com os argumentos: Base_Norte 6000 2
+    command: ./base Base_Norte 6000 2
     ports:
       - "6000:6000"
 
   base_sul:
-    build: .
-    command: ["go", "run", "drone_base.go", "Base_Sul", "6001", "3"]
+    build:
+      context: ./base
+    container_name: base_sul
+    command: ./base Base_Sul 6001 2
     ports:
       - "6001:6001"
 
   # ==========================================
-  # GERENCIADORES DE SETOR (BROKERS)
+  # BROKERS (GERENCIADORES DE SETOR)
   # ==========================================
-  broker_a:
-    build: .
-    # Comando: arquivo, ID_Broker, Porta_P2P, Porta_Sensor
-    command: ["go", "run", "broker.go", "Setor_A", "5001", "7001"]
+  broker_1:
+    build:
+      context: ./broker # Aponta para a pasta do Broker
+    container_name: broker_1
+    command: ./broker Setor_1 5001 7001
     environment:
-      # Variáveis injetadas para o Broker saber quem são seus vizinhos
-      - PEERS=Setor_B|broker_b:5002
+      - PEERS=Setor_2|broker_2:5002
       - BASES=base_norte:6000,base_sul:6001
     depends_on:
       - base_norte
       - base_sul
 
-  broker_b:
-    build: .
-    command: ["go", "run", "broker.go", "Setor_B", "5002", "7002"]
+  broker_2:
+    build:
+      context: ./broker
+    container_name: broker_2
+    command: ./broker Setor_2 5002 7002
     environment:
-      - PEERS=Setor_A|broker_a:5001
+      - PEERS=Setor_1|broker_1:5001
       - BASES=base_norte:6000,base_sul:6001
     depends_on:
       - base_norte
@@ -45,15 +49,18 @@ services:
   # ==========================================
   # SENSORES
   # ==========================================
-  sensor_a:
-    build: .
-    # Passando o ID do setor e o endereço do Broker via argumento
-    command: ["go", "run", "sensor.go", "Setor_A", "broker_a:7001"]
+  sensor_1:
+    build:
+      context: ./sensores # Aponta para a pasta dos Sensores
+    container_name: sensor_1
+    command: ./sensor Setor_1 broker_1:7001
     depends_on:
-      - broker_a
-
-  sensor_b:
-    build: .
-    command: ["go", "run", "sensor.go", "Setor_B", "broker_b:7002"]
+      - broker_1
+      
+  sensor_2:
+    build:
+      context: ./sensores # Aponta para a pasta dos Sensores
+    container_name: sensor_2
+    command: ./sensor Setor_2 broker_2:7002
     depends_on:
-      - broker_b
+      - broker_2

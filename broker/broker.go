@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,18 +39,27 @@ type Broker struct {
 }
 
 func main() {
-	// Exemplo de execução. Em produção, use Flags ou ENV vars.
-	// go run broker.go Setor_A 5001 (5001 p2p, 6001 sensores)
 	id := os.Args[1]
 	p2pPort := os.Args[2]
 	sensorPort := os.Args[3]
 
 	// Configuração da rede (isso deve vir de um arquivo ou ENV no Docker)
-	peers := map[string]string{
-		"Setor_B": "localhost:5002",
-		"Setor_C": "localhost:5003",
+	peers := map[string]string{}
+	if peersEnv := os.Getenv("PEERS"); peersEnv != "" {
+		for _, entry := range strings.Split(peersEnv, ",") {
+			parts := strings.SplitN(entry, "|", 2)
+			if len(parts) == 2 {
+				peers[parts[0]] = parts[1]
+				fmt.Printf("[Broker %s] Peer registrado: %s -> %s\n", id, parts[0], parts[1])
+			}
+		}
 	}
-	bases := []string{"localhost:6000", "localhost:6001"}
+
+	bases := []string{}
+	if basesEnv := os.Getenv("BASES"); basesEnv != "" {
+		bases = strings.Split(basesEnv, ",")
+		fmt.Printf("[Broker %s] Bases registradas: %v\n", id, bases)
+	}
 
 	broker := NewBroker(id, p2pPort, peers, bases)
 
@@ -185,6 +195,25 @@ func (b *Broker) processSensorData(conn net.Conn) {
 	b.State = "IN_CS" // Entrou na Seção Crítica
 	b.StateMutex.Unlock()
 
+	// Se não há peers, entra direto na seção crítica (broker sozinho)
+	if len(b.Peers) == 0 {
+		fmt.Printf("[Broker %s] Sem peers, entrando direto na seção crítica.\n", b.ID)
+		b.StateMutex.Lock()
+		b.State = "IN_CS"
+		b.StateMutex.Unlock()
+	} else {
+		for id := range b.Peers {
+			b.sendDirectMessage(id, "REQ_DRONE")
+		}
+
+		b.StateMutex.Lock()
+		for b.AcksReceived < len(b.Peers) {
+			b.AckCondition.Wait()
+		}
+		b.State = "IN_CS"
+		b.StateMutex.Unlock()
+	}
+
 	// SEÇÃO CRÍTICA: Tentar alocar o drone nas bases
 	fmt.Printf("[Broker %s] Permissão concedida. Contatando bases...\n", b.ID)
 	b.requestDroneToBases()
@@ -215,7 +244,9 @@ func (b *Broker) requestDroneToBases() {
 			conn.Close()
 
 			if resp["status"] == "ACCEPTED" {
+				droneID := resp["drone_id"]
 				fmt.Printf("[Broker %s] Drone %s alocado pela base %s!\n", b.ID, resp["drone_id"], resp["base_id"])
+				b.waitForDroneReturn(baseAddr, droneID)
 				success = true
 				break
 			}
@@ -223,6 +254,30 @@ func (b *Broker) requestDroneToBases() {
 		if !success {
 			fmt.Printf("[Broker %s] Sem drones em nenhuma base. Re-tentando...\n", b.ID)
 			time.Sleep(3 * time.Second)
+		}
+	}
+}
+
+func (b *Broker) waitForDroneReturn(baseAddr, droneID string) {
+	for {
+		time.Sleep(2 * time.Second)
+		conn, err := net.DialTimeout("tcp", baseAddr, 2*time.Second)
+		if err != nil {
+			continue
+		}
+
+		json.NewEncoder(conn).Encode(map[string]string{
+			"action":   "STATUS",
+			"drone_id": droneID,
+		})
+
+		var resp map[string]string
+		json.NewDecoder(conn).Decode(&resp)
+		conn.Close()
+
+		if resp["status"] == "LIVRE" {
+			fmt.Printf("[%s] Drone %s retornou.\n", b.ID, droneID)
+			return
 		}
 	}
 }
