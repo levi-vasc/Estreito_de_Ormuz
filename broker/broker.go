@@ -11,11 +11,43 @@ import (
 	"time"
 )
 
+// Namespaces de relógio separados para evitar colisão
+type LogicalClocks struct {
+	P2PClock     int // Para mensagens P2P (REQ, ACK, RELEASE)
+	MissionClock int // Para IDs únicos de missão
+	mutex        sync.Mutex
+}
+
+func (lc *LogicalClocks) UpdateP2P(received int) int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+	if received > lc.P2PClock {
+		lc.P2PClock = received
+	}
+	lc.P2PClock++
+	return lc.P2PClock
+}
+
+func (lc *LogicalClocks) NextMissionID() int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+	lc.MissionClock++
+	return lc.MissionClock
+}
+
+func (lc *LogicalClocks) GetP2PClock() int {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+	return lc.P2PClock
+}
+
 type Message struct {
-	Type     string `json:"type"`
-	SenderID string `json:"sender_id"`
-	Clock    int    `json:"clock"`
-	Priority int    `json:"priority"`
+	Type      string `json:"type"`
+	SenderID  string `json:"sender_id"`
+	Clock     int    `json:"clock"`
+	MissionID int    `json:"mission_id"` // Novo: identificador único de missão
+	Priority  int    `json:"priority"`
+	Timestamp int64  `json:"timestamp"`
 }
 
 type LocalEvent struct {
@@ -23,16 +55,25 @@ type LocalEvent struct {
 	SectorID string
 }
 
+type MissionState struct {
+	MissionID    int
+	BrokerID     string
+	DroneID      string
+	BaseID       string
+	BaseAddr     string
+	Priority     int
+	StartTime    time.Time
+	DroneTimeout time.Duration
+}
+
 type Broker struct {
-	ID    string
-	Port  string
-	Peers map[string]string
-	Bases []string
+	ID     string
+	Port   string
+	Peers  map[string]string
+	Bases  []string
+	Clocks *LogicalClocks
 
-	OrderCounter int
-	CounterMutex sync.Mutex
-	P2PClock     int
-
+	// Estado de exclusão mútua
 	State        string
 	StateMutex   sync.Mutex
 	PendingAcks  map[string]bool
@@ -41,20 +82,25 @@ type Broker struct {
 
 	CurrentReq Message
 
+	// Tabela global de requisições por MissionID (não mais pelo Clock!)
+	GlobalRequests map[int]Message
+	RequestsMutex  sync.Mutex
+
+	// Estado de missões ativas
+	ActiveMissions map[int]*MissionState
+	MissionsMutex  sync.RWMutex
+
 	SensorQueue chan LocalEvent
 
-	ActiveDrones []string
+	// Rastreamento de saúde dos peers
+	PeerLastSeen map[string]time.Time
+	PeerMutex    sync.RWMutex
 
-	// TABELA GLOBAL: Agora mapeia pelo ID único do pedido (Clock) para evitar o bug do RELEASE
-	GlobalRequests map[int]Message
+	// Timeout para esperar by drone (padrão: 30 segundos)
+	DroneWaitTimeout time.Duration
 }
 
 func main() {
-	if len(os.Args) < 4 {
-		fmt.Println("Uso: ./broker <ID> <PORTA_P2P> <PORTA_SENSOR>")
-		return
-	}
-
 	id := os.Args[1]
 	p2pPort := os.Args[2]
 	sensorPort := os.Args[3]
@@ -81,6 +127,7 @@ func main() {
 	go broker.startStatusLogger()
 	go broker.startHealthCheck()
 	go broker.startQueueProcessor()
+	go broker.startMissionMonitor()
 
 	go broker.startSensorServer(sensorPort)
 	broker.startP2PServer()
@@ -88,92 +135,125 @@ func main() {
 
 func NewBroker(id, port string, peers map[string]string, bases []string) *Broker {
 	b := &Broker{
-		ID:             id,
-		Port:           port,
-		Peers:          peers,
-		Bases:          bases,
-		State:          "IDLE",
-		PendingAcks:    make(map[string]bool),
-		SensorQueue:    make(chan LocalEvent, 100),
-		ActiveDrones:   []string{},
-		GlobalRequests: make(map[int]Message),
-		OrderCounter:   0,
-		P2PClock:       0,
+		ID:               id,
+		Port:             port,
+		Peers:            peers,
+		Bases:            bases,
+		Clocks:           &LogicalClocks{P2PClock: 0, MissionClock: 0},
+		State:            "IDLE",
+		PendingAcks:      make(map[string]bool),
+		PendingQueue:     []Message{},
+		GlobalRequests:   make(map[int]Message),
+		ActiveMissions:   make(map[int]*MissionState),
+		SensorQueue:      make(chan LocalEvent, 100),
+		PeerLastSeen:     make(map[string]time.Time),
+		DroneWaitTimeout: 30 * time.Second,
 	}
+
+	// Inicializa PeerLastSeen
+	for peerID := range peers {
+		b.PeerLastSeen[peerID] = time.Now()
+	}
+
 	b.AckCondition = sync.NewCond(&b.StateMutex)
 	return b
 }
 
-func (b *Broker) updateClocks(received int) {
-	b.CounterMutex.Lock()
-	if received > b.OrderCounter {
-		b.OrderCounter = received
-	}
-	if received > b.P2PClock {
-		b.P2PClock = received
-	}
-	b.OrderCounter++
-	b.P2PClock++
-	b.CounterMutex.Unlock()
-}
-
-func (b *Broker) getNextOrderID() int {
-	b.CounterMutex.Lock()
-	b.OrderCounter++
-	id := b.OrderCounter
-	b.P2PClock++
-	b.CounterMutex.Unlock()
-	return id
-}
-
-func (b *Broker) getNextP2PClock() int {
-	b.CounterMutex.Lock()
-	b.P2PClock++
-	c := b.P2PClock
-	b.CounterMutex.Unlock()
-	return c
-}
-
 func (b *Broker) startHealthCheck() {
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(5 * time.Second) // Aumentado para 5 segundos
 	knownDead := make(map[string]bool)
+	const PEER_TIMEOUT = 15 * time.Second // Timeout de 15 segundos antes de considerar morto
 
 	for range ticker.C {
 		for id, addr := range b.Peers {
-			conn, err := net.DialTimeout("tcp", addr, 1*time.Second)
+			conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 			if err != nil {
-				if !knownDead[id] {
-					knownDead[id] = true
-					fmt.Printf("\n[%s] ⚠️ ALERTA: Broker %s caiu! Ajustando rede...\n", b.ID, id)
-				}
-				b.StateMutex.Lock()
-				if _, waiting := b.PendingAcks[id]; waiting {
-					delete(b.PendingAcks, id)
-					if len(b.PendingAcks) == 0 {
-						b.AckCondition.Broadcast()
-					}
-				}
+				b.PeerMutex.Lock()
+				lastSeen := b.PeerLastSeen[id]
+				b.PeerMutex.Unlock()
 
-				// Removemos todos os pedidos do broker que caiu da tela global
-				for clockKey, req := range b.GlobalRequests {
-					if req.SenderID == id {
-						delete(b.GlobalRequests, clockKey)
+				timeSinceLastSeen := time.Since(lastSeen)
+
+				// Só considera morto se passou o timeout
+				if timeSinceLastSeen > PEER_TIMEOUT {
+					if !knownDead[id] {
+						knownDead[id] = true
+						fmt.Printf("\n[%s] 💀 BROKER MORTO: %s (timeout: %v)\n",
+							b.ID, id, timeSinceLastSeen)
+
+						// Remove de ACKs pendentes
+						b.StateMutex.Lock()
+						if _, waiting := b.PendingAcks[id]; waiting {
+							delete(b.PendingAcks, id)
+							if len(b.PendingAcks) == 0 {
+								b.AckCondition.Broadcast()
+							}
+						}
+						b.StateMutex.Unlock()
+
+						// Remove requisições deste broker, mas NÃO remove missões ativas!
+						b.RequestsMutex.Lock()
+						for missionID, req := range b.GlobalRequests {
+							if req.SenderID == id {
+								delete(b.GlobalRequests, missionID)
+							}
+						}
+						b.RequestsMutex.Unlock()
 					}
 				}
-				b.StateMutex.Unlock()
 			} else {
 				if knownDead[id] {
 					knownDead[id] = false
-					fmt.Printf("\n[%s] ♻️ RECUPERAÇÃO: Broker %s reconectado!\n", b.ID, id)
+					fmt.Printf("\n[%s] ♻️ BROKER RECUPERADO: %s\n", b.ID, id)
 				}
+				b.PeerMutex.Lock()
+				b.PeerLastSeen[id] = time.Now()
+				b.PeerMutex.Unlock()
 				conn.Close()
 			}
 		}
 	}
 }
 
+// startMissionMonitor verifica timeouts de missões
+func (b *Broker) startMissionMonitor() {
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		b.MissionsMutex.Lock()
+		now := time.Now()
+
+		for missionID, mission := range b.ActiveMissions {
+			elapsed := now.Sub(mission.StartTime)
+			if elapsed > mission.DroneTimeout {
+				fmt.Printf("[%s] ⚠️ TIMEOUT DE MISSÃO: MissionID=%d (drone %s não voltou em %v)\n",
+					b.ID, missionID, mission.DroneID, mission.DroneTimeout)
+
+				// Remove a missão como ativa
+				delete(b.ActiveMissions, missionID)
+
+				// Limpa do GlobalRequests
+				b.RequestsMutex.Lock()
+				delete(b.GlobalRequests, missionID)
+				b.RequestsMutex.Unlock()
+
+				// Emite RELEASE mesmo assim para limpar outras brokers
+				go func(missionID int) {
+					for peerID := range b.Peers {
+						b.sendDirectMessage(peerID, "RELEASE", 0, 0, missionID)
+					}
+				}(missionID)
+			}
+		}
+		b.MissionsMutex.Unlock()
+	}
+}
+
 func (b *Broker) startStatusLogger() {
-	ticker := time.NewTicker(10 * time.Second)
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
 	for range ticker.C {
 		b.StateMutex.Lock()
 		state := b.State
@@ -182,12 +262,13 @@ func (b *Broker) startStatusLogger() {
 		if b.State == "WAITING" || b.State == "IN_CS" {
 			allRequests = append(allRequests, b.CurrentReq)
 		}
+
+		b.RequestsMutex.Lock()
 		for _, req := range b.GlobalRequests {
 			allRequests = append(allRequests, req)
 		}
+		b.RequestsMutex.Unlock()
 
-		activeDronesCopy := make([]string, len(b.ActiveDrones))
-		copy(activeDronesCopy, b.ActiveDrones)
 		b.StateMutex.Unlock()
 
 		sort.Slice(allRequests, func(i, j int) bool {
@@ -204,36 +285,55 @@ func (b *Broker) startStatusLogger() {
 			status = "⏳ AGUARDANDO PERMISSÃO NA REDE"
 		}
 
-		droneStr := "❌ Nenhum drone neste broker no momento."
-		if len(activeDronesCopy) > 0 {
-			droneStr = "🚁 " + strings.Join(activeDronesCopy, ", ")
+		b.MissionsMutex.RLock()
+
+		// --- NOVO: Montando a variável droneStr ---
+		var drones []string
+		for _, m := range b.ActiveMissions {
+			// Formata no estilo: 🚁 Drone_01 (Base_01)
+			drones = append(drones, fmt.Sprintf("🚁 %s (%s)", m.DroneID, m.BaseID))
 		}
+		b.MissionsMutex.RUnlock()
+
+		droneStr := "Nenhum"
+		if len(drones) > 0 {
+			droneStr = strings.Join(drones, ", ")
+		}
+		// ------------------------------------------
 
 		fmt.Printf("\n================ STATUS %s ================\n", b.ID)
-		fmt.Printf("Status de Concorrência: %s\n", status)
-		fmt.Printf("Drones Gerenciados Aqui: %s\n", droneStr)
+		fmt.Printf("Estado: %s\n", status)
+		fmt.Printf("Drones no Setor: %s\n", droneStr) // Informação adicionada no log
 
-		fmt.Printf("\n--- Fila Global de Requisições Ativas (Top 5) ---\n")
-		if len(allRequests) == 0 {
-			fmt.Printf("Fila vazia (Nenhuma ocorrência ativa na rede).\n")
-		} else {
+		if len(allRequests) > 0 {
+			fmt.Printf("\n--- Top 5 Requisições ---\n")
 			limit := 5
 			if len(allRequests) < limit {
 				limit = len(allRequests)
 			}
 			for i := 0; i < limit; i++ {
 				msg := allRequests[i]
-				fmt.Printf("Pedido %d | Prioridade %d | %s\n", msg.Clock, msg.Priority, msg.SenderID)
+				fmt.Printf("Pedido (MissionID: %d) | Prioridade %d | %s\n",
+					msg.MissionID, msg.Priority, msg.SenderID)
 			}
 		}
-		fmt.Printf("===================================================\n\n")
+		fmt.Printf("===============================================\n\n")
 	}
 }
 
 func (b *Broker) startP2PServer() {
-	ln, _ := net.Listen("tcp", ":"+b.Port)
+	ln, err := net.Listen("tcp", ":"+b.Port)
+	if err != nil {
+		fmt.Printf("[%s] Erro ao iniciar servidor P2P: %v\n", b.ID, err)
+		return
+	}
+	defer ln.Close()
+
 	for {
-		conn, _ := ln.Accept()
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
 		go b.handleP2PConnection(conn)
 	}
 }
@@ -245,22 +345,30 @@ func (b *Broker) handleP2PConnection(conn net.Conn) {
 		return
 	}
 
-	b.updateClocks(msg.Clock)
+	// Atualiza relógio P2P (namespace separado!)
+	b.Clocks.UpdateP2P(msg.Clock)
 
 	b.StateMutex.Lock()
+	defer b.StateMutex.Unlock()
+
 	switch msg.Type {
 	case "ACK":
 		delete(b.PendingAcks, msg.SenderID)
 		if len(b.PendingAcks) == 0 {
 			b.AckCondition.Broadcast()
 		}
+
 	case "REQ_DRONE":
-		b.GlobalRequests[msg.Clock] = msg // Salva pelo Clock (Número do Pedido)
+		b.RequestsMutex.Lock()
+		b.GlobalRequests[msg.MissionID] = msg // Usa MissionID, não Clock!
+		b.RequestsMutex.Unlock()
 		b.handleRequest(msg)
+
 	case "RELEASE":
-		delete(b.GlobalRequests, msg.Clock) // Apaga exatamente o Pedido que finalizou
+		b.RequestsMutex.Lock()
+		delete(b.GlobalRequests, msg.MissionID) // Apaga por MissionID exato
+		b.RequestsMutex.Unlock()
 	}
-	b.StateMutex.Unlock()
 }
 
 func (b *Broker) handleRequest(incomingReq Message) {
@@ -274,14 +382,24 @@ func (b *Broker) handleRequest(incomingReq Message) {
 	if needsToWait {
 		b.PendingQueue = append(b.PendingQueue, incomingReq)
 	} else {
-		b.sendDirectMessage(incomingReq.SenderID, "ACK", b.CurrentReq.Priority, incomingReq.Clock)
+		ackClock := b.Clocks.UpdateP2P(0)
+		b.sendDirectMessage(incomingReq.SenderID, "ACK", b.CurrentReq.Priority, ackClock, 0)
 	}
 }
 
 func (b *Broker) startSensorServer(port string) {
-	ln, _ := net.Listen("tcp", ":"+port)
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		fmt.Printf("[%s] Erro ao iniciar servidor de sensores: %v\n", b.ID, err)
+		return
+	}
+	defer ln.Close()
+
 	for {
-		conn, _ := ln.Accept()
+		conn, err := ln.Accept()
+		if err != nil {
+			continue
+		}
 		go b.receiveSensorData(conn)
 	}
 }
@@ -289,10 +407,15 @@ func (b *Broker) startSensorServer(port string) {
 func (b *Broker) receiveSensorData(conn net.Conn) {
 	defer conn.Close()
 	var sensorEvt map[string]interface{}
-	json.NewDecoder(conn).Decode(&sensorEvt)
+	if err := json.NewDecoder(conn).Decode(&sensorEvt); err != nil {
+		return
+	}
 
 	priority := int(sensorEvt["priority"].(float64))
 	sectorID := sensorEvt["sector_id"].(string)
+
+	// Envia ACK de recebimento para o sensor
+	json.NewEncoder(conn).Encode(map[string]string{"status": "RECEIVED"})
 
 	b.SensorQueue <- LocalEvent{Priority: priority, SectorID: sectorID}
 }
@@ -312,22 +435,38 @@ func (b *Broker) executeDistributedExclusion(evt LocalEvent) {
 		b.PendingAcks[id] = true
 	}
 
+	// NOVO: Usa MissionID em vez de Clock para missões
+	missionID := b.Clocks.NextMissionID()
+	msgClock := b.Clocks.GetP2PClock()
+
 	b.CurrentReq = Message{
-		Type:     "REQ_DRONE",
-		SenderID: b.ID,
-		Clock:    b.getNextOrderID(),
-		Priority: evt.Priority,
+		Type:      "REQ_DRONE",
+		SenderID:  b.ID,
+		Clock:     msgClock,
+		MissionID: missionID,
+		Priority:  evt.Priority,
+		Timestamp: time.Now().Unix(),
 	}
+
+	b.RequestsMutex.Lock()
+	b.GlobalRequests[missionID] = b.CurrentReq
+	b.RequestsMutex.Unlock()
+
 	b.StateMutex.Unlock()
 
+	// Envia requisição para todos os peers
 	for id := range b.Peers {
-		if !b.sendDirectMessage(id, "REQ_DRONE", evt.Priority, b.CurrentReq.Clock) {
+		if !b.sendDirectMessage(id, "REQ_DRONE", evt.Priority, msgClock, missionID) {
 			b.StateMutex.Lock()
 			delete(b.PendingAcks, id)
+			if len(b.PendingAcks) == 0 {
+				b.AckCondition.Broadcast()
+			}
 			b.StateMutex.Unlock()
 		}
 	}
 
+	// Aguarda todos os ACKs
 	b.StateMutex.Lock()
 	for len(b.PendingAcks) > 0 {
 		b.AckCondition.Wait()
@@ -335,28 +474,46 @@ func (b *Broker) executeDistributedExclusion(evt LocalEvent) {
 	b.State = "IN_CS"
 	b.StateMutex.Unlock()
 
-	// Recebe o ID da base também
+	// NOVO: Alocação de drone agora é ATÔMICA com a entrada em CS
 	baseAddr, rawDroneID, baseID := b.requestDroneToBases(evt.SectorID)
 
-	// Formata o nome visual único
+	if baseAddr == "" {
+		// Falhou ao alocar drone, libera CS imediatamente
+		fmt.Printf("[%s] ❌ Falha ao alocar drone para missão %d\n", b.ID, missionID)
+		b.releaseSection(missionID)
+		return
+	}
+
 	uniqueDroneName := fmt.Sprintf("%s (%s)", rawDroneID, baseID)
 
-	b.StateMutex.Lock()
-	b.ActiveDrones = append(b.ActiveDrones, uniqueDroneName)
-	b.StateMutex.Unlock()
+	// Registra missão ativa
+	b.MissionsMutex.Lock()
+	b.ActiveMissions[missionID] = &MissionState{
+		MissionID:    missionID,
+		BrokerID:     b.ID,
+		DroneID:      rawDroneID,
+		BaseID:       baseID,
+		BaseAddr:     baseAddr,
+		Priority:     evt.Priority,
+		StartTime:    time.Now(),
+		DroneTimeout: b.DroneWaitTimeout,
+	}
+	b.MissionsMutex.Unlock()
 
-	missionClock := b.CurrentReq.Clock // Salva o ID exato desta missão
+	// Sai da CS imediatamente (antes de esperar drone voltar)
+	b.releaseSection(missionID)
 
-	b.releaseSection()
-
-	// Envia os dados crus para a rede, mas o nome único para o logger
-	go b.waitForDroneReturnAndNotify(baseAddr, rawDroneID, uniqueDroneName, missionClock)
+	// Monitora retorno do drone (fora de CS)
+	go b.waitForDroneReturnAndNotify(baseAddr, rawDroneID, uniqueDroneName, missionID)
 }
 
 func (b *Broker) requestDroneToBases(targetSector string) (string, string, string) {
-	for {
+	maxRetries := 10
+	retryCount := 0
+
+	for retryCount < maxRetries {
 		for _, baseAddr := range b.Bases {
-			conn, err := net.DialTimeout("tcp", baseAddr, 2*time.Second)
+			conn, err := net.DialTimeout("tcp", baseAddr, 3*time.Second)
 			if err != nil {
 				continue
 			}
@@ -368,81 +525,110 @@ func (b *Broker) requestDroneToBases(targetSector string) (string, string, strin
 			})
 
 			var resp map[string]string
-			json.NewDecoder(conn).Decode(&resp)
+			err = json.NewDecoder(conn).Decode(&resp)
 			conn.Close()
 
-			if resp["status"] == "ACCEPTED" {
+			if err == nil && resp["status"] == "ACCEPTED" {
 				droneID := resp["drone_id"]
 				baseID := resp["base_id"]
 				return baseAddr, droneID, baseID
 			}
 		}
-		time.Sleep(3 * time.Second)
+
+		retryCount++
+		if retryCount < maxRetries {
+			time.Sleep(2 * time.Second)
+		}
 	}
+
+	return "", "", "" // Falhou após retries
 }
 
-func (b *Broker) waitForDroneReturnAndNotify(baseAddr, rawDroneID, uniqueDroneName string, missionClock int) {
-	for {
+func (b *Broker) waitForDroneReturnAndNotify(baseAddr, rawDroneID, uniqueDroneName string, missionID int) {
+	maxRetries := 60 // 60 tentativas de 2 segundos = 2 minutos máximo
+	retryCount := 0
+
+	for retryCount < maxRetries {
 		time.Sleep(2 * time.Second)
 		conn, err := net.DialTimeout("tcp", baseAddr, 2*time.Second)
 		if err != nil {
+			retryCount++
 			continue
 		}
 
 		json.NewEncoder(conn).Encode(map[string]string{
 			"action": "STATUS",
-			"target": rawDroneID, // A base ainda atende pelo ID original
+			"target": rawDroneID,
 		})
 
 		var resp map[string]string
-		json.NewDecoder(conn).Decode(&resp)
+		err = json.NewDecoder(conn).Decode(&resp)
 		conn.Close()
 
-		if resp["status"] == "LIVRE" {
-			fmt.Printf("[%s] ✅ %s retornou à base e está LIVRE.\n", b.ID, uniqueDroneName)
+		if err == nil && resp["status"] == "LIVRE" {
+			b.MissionsMutex.Lock()
+			delete(b.ActiveMissions, missionID)
+			b.MissionsMutex.Unlock()
 
-			b.StateMutex.Lock()
-			for i, d := range b.ActiveDrones {
-				if d == uniqueDroneName {
-					b.ActiveDrones = append(b.ActiveDrones[:i], b.ActiveDrones[i+1:]...)
-					break
-				}
-			}
-			b.StateMutex.Unlock()
-
-			// Emite o sinal de RELEASE especificando o relógio (Pedido) que deve ser apagado
+			// Emite RELEASE para todos os peers
+			releaseClock := b.Clocks.UpdateP2P(0)
 			for id := range b.Peers {
-				b.sendDirectMessage(id, "RELEASE", 0, missionClock)
+				b.sendDirectMessage(id, "RELEASE", 0, releaseClock, missionID)
 			}
 			return
 		}
+
+		retryCount++
+	}
+
+	// Timeout esperando drone voltar
+	fmt.Printf("[%s] 💀 TIMEOUT: MissionID %d (%s) não retornou após %d tentativas\n",
+		b.ID, missionID, uniqueDroneName, maxRetries)
+
+	b.MissionsMutex.Lock()
+	delete(b.ActiveMissions, missionID)
+	b.MissionsMutex.Unlock()
+
+	// Mesmo assim emite RELEASE
+	releaseClock := b.Clocks.UpdateP2P(0)
+	for id := range b.Peers {
+		b.sendDirectMessage(id, "RELEASE", 0, releaseClock, missionID)
 	}
 }
 
-func (b *Broker) releaseSection() {
+func (b *Broker) releaseSection(missionID int) {
 	b.StateMutex.Lock()
 	defer b.StateMutex.Unlock()
 
 	b.State = "IDLE"
+
+	// Processa fila de requisições pendentes
 	for _, pReq := range b.PendingQueue {
-		b.sendDirectMessage(pReq.SenderID, "ACK", 0, b.getNextP2PClock())
+		ackClock := b.Clocks.UpdateP2P(0)
+		b.sendDirectMessage(pReq.SenderID, "ACK", 0, ackClock, 0)
 	}
 	b.PendingQueue = []Message{}
 }
 
-func (b *Broker) sendDirectMessage(targetID, msgType string, priority int, clockValue int) bool {
+func (b *Broker) sendDirectMessage(targetID, msgType string, priority int, clockValue int, missionID int) bool {
 	addr := b.Peers[targetID]
-	conn, err := net.DialTimeout("tcp", addr, time.Second)
+	if addr == "" {
+		return false // Peer não existe
+	}
+
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 	if err != nil {
 		return false
 	}
 	defer conn.Close()
 
 	json.NewEncoder(conn).Encode(Message{
-		Type:     msgType,
-		SenderID: b.ID,
-		Clock:    clockValue,
-		Priority: priority,
+		Type:      msgType,
+		SenderID:  b.ID,
+		Clock:     clockValue,
+		MissionID: missionID,
+		Priority:  priority,
+		Timestamp: time.Now().Unix(),
 	})
 
 	return true
