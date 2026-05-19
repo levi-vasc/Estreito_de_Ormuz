@@ -6,31 +6,24 @@ import (
 	"math/rand"
 	"net"
 	"os"
-	"strings"
 	"time"
 )
 
 type SensorEvent struct {
-	Type     string `json:"type"`
-	Priority int    `json:"priority"`
+	Type     string `json:"type"`     // ex: "EMBARCACAO_A_DERIVA", "BLOQUEIO"
+	Priority int    `json:"priority"` // 1 a 3
 	SectorID string `json:"sector_id"`
 }
 
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Uso: ./sensor <SECTOR_ID> <BROKER1_IP:PORT,BROKER2_IP:PORT...>")
-		return
-	}
-
 	rand.Seed(time.Now().UnixNano())
 	sector_ID := os.Args[1]
-
-	// Divide a string recebida no Docker Compose em um array de endereços
-	brokers_addrs := strings.Split(os.Args[2], ",")
+	broker_addr := os.Args[2]
 
 	eventos_possiveis := []string{"EMBARCACAO_DERIVA", "BLOQUEIO_ROTA", "OBJETO_NAO_IDENTIFICADO"}
 
 	for {
+		// Simula um intervalo autônomo e aleatório entre eventos
 		time.Sleep(time.Duration(rand.Intn(10)+5) * time.Second)
 
 		evento := SensorEvent{
@@ -39,28 +32,19 @@ func main() {
 			SectorID: sector_ID,
 		}
 
-		sendToBrokerWithFailover(brokers_addrs, evento)
+		sendToBroker(broker_addr, evento)
 	}
 }
 
-func sendToBrokerWithFailover(brokers []string, event SensorEvent) {
-	for i, addr := range brokers {
-		// Tenta conectar. Se falhar, o err não será nulo e ele vai para o próximo do loop
-		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
-		if err == nil {
-			defer conn.Close()
-			encoder := json.NewEncoder(conn)
-			encoder.Encode(event)
-
-			if i == 0 {
-				fmt.Printf("[Sensor %s] ✅ Evento (Prio %d) enviado ao broker PRINCIPAL: %s\n", event.SectorID, event.Priority, addr)
-			} else {
-				fmt.Printf("[Sensor %s] ⚠️ FAILOVER: Evento (Prio %d) enviado ao broker SECUNDÁRIO: %s\n", event.SectorID, event.Priority, addr)
-			}
-			return
-		}
-		fmt.Printf("[Sensor %s] ❌ Falha ao contatar broker %s. Buscando vizinho...\n", event.SectorID, addr)
+func sendToBroker(address string, event SensorEvent) {
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		fmt.Println("Erro ao conectar com o Broker local:", err)
+		return
 	}
+	defer conn.Close()
 
-	fmt.Printf("[Sensor %s] 🚨 FATAL: Todos os brokers vizinhos caíram. Evento perdido!\n", event.SectorID)
+	encoder := json.NewEncoder(conn)
+	encoder.Encode(event)
+	fmt.Printf("Sensor disparou evento crítico nível %d: %s\n", event.Priority, event.Type)
 }
