@@ -88,28 +88,28 @@ services:
     build:
       context: ./sensores
     container_name: sensor_1
-    command: ./sensor Setor_1 ${broker_1}:7001
+    command: ./sensor Setor_1 ${broker_1}:7001, ${broker_5}:7005, ${broker_2}:7002
       
   sensor_2:
     build:
       context: ./sensores
     container_name: sensor_2
-    command: ./sensor Setor_2 ${broker_2}:7002
+    command: ./sensor Setor_2 ${broker_2}:7002, ${broker_1}:7001, ${broker_3}:7003
 
   sensor_3:
     build:
       context: ./sensores
     container_name: sensor_3
-    command: ./sensor Setor_3 ${broker_3}:7003
+    command: ./sensor Setor_3 ${broker_3}:7003,${broker_2}:7002,${broker_4}:7004
 
   sensor_4:
     build:
       context: ./sensores
     container_name: sensor_4
-    command: ./sensor Setor_4 ${broker_4}:7004
+    command: ./sensor Setor_4 ${broker_4}:7004,${broker_3}:7003,${broker_5}:7005
 
   sensor_5:
     build:
       context: ./sensores
     container_name: sensor_5
-    command: ./sensor Setor_5 ${broker_5}:7005
+    command: ./sensor Setor_5 ${broker_5}:7005, ${broker_4}:7004,${broker_1}:7001
