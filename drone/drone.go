@@ -3,13 +3,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net"
 	"os"
 	"time"
 )
 
-// Command mapeia a estrutura JSON esperada pela base (GenericCommand no base.go)
 type Command struct {
 	Action  string `json:"action"`
 	Target  string `json:"target"`
@@ -22,46 +20,46 @@ func main() {
 		return
 	}
 
-	rand.Seed(time.Now().UnixNano())
 	baseAddr := os.Args[1]
+	fmt.Printf("[Novo Drone] Iniciando sistemas. Tentando conectar a %s...\n", baseAddr)
 
-	// Gera um ID único combinando o hostname do container Docker e um número aleatório
-	hostname, _ := os.Hostname()
-	droneID := fmt.Sprintf("Drone_%s_%03d", hostname, rand.Intn(1000))
-
-	fmt.Printf("[%s] Iniciando sistemas. Tentando conectar à base em %s...\n", droneID, baseAddr)
-
-	// Estabelece conexão persistente com a base
 	conn, err := net.Dial("tcp", baseAddr)
 	if err != nil {
-		fmt.Printf("[%s] ❌ Falha ao conectar à base: %v\n", droneID, err)
-		os.Exit(1) // Encerra para que o Docker reinicie o container
+		fmt.Printf("❌ Falha ao conectar à base: %v\n", err)
+		os.Exit(1)
 	}
 	defer conn.Close()
 
 	encoder := json.NewEncoder(conn)
 	decoder := json.NewDecoder(conn)
 
-	// 1. Fase de Registro
-	regCmd := Command{
-		Action:  "REGISTER",
-		DroneID: droneID,
-	}
+	// 1. Solicita registro SEM identificação própria
+	regCmd := Command{Action: "REGISTER"}
 	if err := encoder.Encode(regCmd); err != nil {
-		fmt.Printf("[%s] ❌ Erro ao enviar registro: %v\n", droneID, err)
+		fmt.Printf("❌ Erro ao solicitar registro: %v\n", err)
 		os.Exit(1)
 	}
+
+	// 2. Aguarda o "batismo" da Base (recebimento do ID oficial)
+	var ackCmd Command
+	if err := decoder.Decode(&ackCmd); err != nil || ackCmd.Action != "REGISTER_ACK" {
+		fmt.Printf("❌ Falha ao receber identidade oficial da base\n")
+		os.Exit(1)
+	}
+
+	// 3. Assume a identidade fornecida
+	droneID := ackCmd.DroneID
 	fmt.Printf("[%s] ✅ Registrado com sucesso na base!\n", droneID)
 
-	// 2. Inicia o envio periódico de Heartbeats (sinais de vida)
+	// Inicia rotina de Heartbeat para manter conexão viva
 	go startHeartbeat(encoder, droneID)
 
-	// 3. Loop principal: ouvindo comandos da Base
+	// Loop principal de recebimento de comandos
 	for {
 		var incomingCmd Command
 		if err := decoder.Decode(&incomingCmd); err != nil {
 			fmt.Printf("[%s] ❌ Conexão com a base perdida: %v\n", droneID, err)
-			os.Exit(1) // O container morre e o Docker cuida de subir um novo
+			os.Exit(1) // Morre para que o Docker reinicie o container
 		}
 
 		if incomingCmd.Action == "FLY" {
@@ -70,7 +68,6 @@ func main() {
 	}
 }
 
-// startHeartbeat avisa a base a cada 5 segundos que este drone continua online
 func startHeartbeat(encoder *json.Encoder, droneID string) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -80,20 +77,17 @@ func startHeartbeat(encoder *json.Encoder, droneID string) {
 			Action:  "HEARTBEAT",
 			DroneID: droneID,
 		}
-		// Se der erro ao enviar, ignoramos aqui, pois o loop principal vai capturar a queda de conexão no Decode()
 		encoder.Encode(beatCmd)
 	}
 }
 
-// executeFlight simula a missão e avisa a base quando terminar
 func executeFlight(encoder *json.Encoder, droneID string, targetSector string) {
-	fmt.Printf("\n[%s] 🚁 RECEBEU ORDEM DE VOO!\n", droneID)
-	fmt.Printf("[%s] 🚀 Decolando em direção ao %s...\n", droneID, targetSector)
+	fmt.Printf("\n[%s] 🚀 Decolando em direção ao %s...\n", droneID, targetSector)
 
-	// Simula o tempo de voo e resolução do problema (10 segundos)
+	// Simulação do tempo de voo e atendimento da ocorrência (10s)
 	time.Sleep(10 * time.Second)
 
-	fmt.Printf("[%s] ✅ Missão no %s concluída. Retornando à base...\n", droneID, targetSector)
+	fmt.Printf("[%s] ✅ Missão em %s concluída. Retornando...\n", droneID, targetSector)
 
 	completeCmd := Command{
 		Action:  "MISSION_COMPLETE",
@@ -101,7 +95,7 @@ func executeFlight(encoder *json.Encoder, droneID string, targetSector string) {
 	}
 
 	if err := encoder.Encode(completeCmd); err != nil {
-		fmt.Printf("[%s] ⚠️ Erro ao reportar conclusão da missão: %v\n", droneID, err)
+		fmt.Printf("[%s] ⚠️ Erro ao reportar conclusão: %v\n", droneID, err)
 		os.Exit(1)
 	}
 }

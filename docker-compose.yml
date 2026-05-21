@@ -21,34 +21,33 @@ services:
   # ==========================================
   # DRONES (Worker Nodes)
   # ==========================================
-  # Drones apontando para a Base 1
-  drone_b1:
+  drone_11:
     build:
       context: ./drone # Você precisará criar o diretório ./drone com o drone.go e um Dockerfile
     command: ./drone ${base_1}:6000 # Argumento apontando para onde ele deve se registrar
     depends_on:
       - base_1 # Garante que o drone só suba depois da base
 
-  drone_b2:
+  drone_12:
     build:
       context: ./drone
-    command: ./drone ${base_2}:6001
-    depends_on:
-      - base_2
-
-  drone_a1:
-    build:
-      context: ./drone
-    command: ./drone ${base_1}:6000
+    command: ./drone ${base_1}:6001
     depends_on:
       - base_1
 
-  drone_a2:
+  drone_21:
     build:
       context: ./drone
     command: ./drone ${base_2}:6001
     depends_on:
       - base_2
+
+  drone_22:
+    build:
+      context: ./drone
+    command: ./drone ${base_2}:6001
+    depends_on:
+      - base_2        
 
   # ==========================================
   # BROKERS (GERENCIADORES DE SETOR)
@@ -118,42 +117,30 @@ services:
   # ==========================================
   sensor_1:
     build:
-      context: ./sensores
+      context: ./sensor
     container_name: sensor_1
-<<<<<<< Updated upstream
-    command: ./sensor Setor_1 ${broker_1}:7001
-=======
     command: ./sensor Setor_1 ${broker_1}:7001,${broker_5}:7005,${broker_2}:7002
->>>>>>> Stashed changes
       
   sensor_2:
     build:
-      context: ./sensores
+      context: ./sensor
     container_name: sensor_2
-<<<<<<< Updated upstream
-    command: ./sensor Setor_2 ${broker_2}:7002
-=======
     command: ./sensor Setor_2 ${broker_2}:7002,${broker_1}:7001,${broker_3}:7003
->>>>>>> Stashed changes
 
   sensor_3:
     build:
-      context: ./sensores
+      context: ./sensor
     container_name: sensor_3
-    command: ./sensor Setor_3 ${broker_3}:7003
+    command: ./sensor Setor_3 ${broker_3}:7003,${broker_2}:7002,${broker_4}:7004
 
   sensor_4:
     build:
-      context: ./sensores
+      context: ./sensor
     container_name: sensor_4
-    command: ./sensor Setor_4 ${broker_4}:7004
+    command: ./sensor Setor_4 ${broker_4}:7004,${broker_3}:7003,${broker_5}:7005
 
   sensor_5:
     build:
-      context: ./sensores
+      context: ./sensor
     container_name: sensor_5
-<<<<<<< Updated upstream
-    command: ./sensor Setor_5 ${broker_5}:7005
-=======
     command: ./sensor Setor_5 ${broker_5}:7005,${broker_4}:7004,${broker_1}:7001
->>>>>>> Stashed changes
