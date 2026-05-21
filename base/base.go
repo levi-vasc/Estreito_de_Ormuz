@@ -9,7 +9,8 @@ import (
 	"time"
 )
 
-// GenericCommand mapeia a estrutura JSON esperada tanto de Brokers quanto de Drones
+// Define o contrato do payload JSON utilizado para o roteamento
+// de mensagens inter-serviços (Brokers, Bases e Drones).
 type GenericCommand struct {
 	Action   string `json:"action"`
 	Target   string `json:"target"`
@@ -17,9 +18,11 @@ type GenericCommand struct {
 	DroneID  string `json:"drone_id"`
 }
 
+// Encapsula o estado de alocação, a conexão TCP bidirecional persistente e
+// os primitivos de sincronização para garantir acesso aos atributos da unidade.
 type Drone struct {
 	ID            string
-	Status        string // "LIVRE", "OCUPADO"
+	Status        string
 	Conn          net.Conn
 	LastHeartbeat time.Time
 	Mutex         sync.Mutex
@@ -29,15 +32,12 @@ var (
 	base_id      string
 	base_drones  = make(map[string]*Drone)
 	droneMutex   sync.RWMutex
-	droneCounter int // Contador global para os nomes sequenciais
+	droneCounter int
 )
 
+// Inicializa a Base Operacional, realizando o bind do servidor TCP na porta especificada,
+// e inicia as rotinas independentes de varredura de health check e o listener multiplexador.
 func main() {
-	if len(os.Args) < 3 {
-		fmt.Println("Uso: ./base <BASE_ID> <PORT>")
-		return
-	}
-
 	base_id = os.Args[1]
 	port := os.Args[2]
 
@@ -48,7 +48,6 @@ func main() {
 	defer ln.Close()
 	fmt.Printf("[%s] Base operacional na porta %s. Aguardando conexões...\n", base_id, port)
 
-	// Inicia verificação periódica de saúde dos drones ativos
 	go startDroneHealthCheck()
 
 	for {
@@ -60,6 +59,8 @@ func main() {
 	}
 }
 
+// Executa uma rotina de monitoramento periódico para identificar e
+// fechar sockets pendentes ("zombie connections") de drones que excederam o timeout.
 func startDroneHealthCheck() {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
@@ -69,7 +70,6 @@ func startDroneHealthCheck() {
 		now := time.Now()
 		for id, d := range base_drones {
 			d.Mutex.Lock()
-			// Timeout de 15 segundos sem heartbeat
 			if now.Sub(d.LastHeartbeat) > 15*time.Second {
 				fmt.Printf("[%s] ⚠️ TIMEOUT: %s perdeu ligação. Removendo da frota.\n", base_id, d.ID)
 				d.Conn.Close()
@@ -81,6 +81,8 @@ func startDroneHealthCheck() {
 	}
 }
 
+// Decodifica a mensagem TCP inicial e atua como um roteador de chamadas
+// com base na propriedade "Action", delegando o socket para o handler apropriado.
 func handleIncomingConnection(conn net.Conn) {
 	var cmd GenericCommand
 	if err := json.NewDecoder(conn).Decode(&cmd); err != nil {
@@ -91,19 +93,16 @@ func handleIncomingConnection(conn net.Conn) {
 
 	switch cmd.Action {
 	case "REGISTER":
-		// 1. Gera o nome sequencial protegido por Mutex
 		droneMutex.Lock()
 		droneCounter++
 		assignedID := fmt.Sprintf("Drone_%d", droneCounter)
 		droneMutex.Unlock()
 
-		// 2. Responde ao drone com seu novo nome oficial
 		json.NewEncoder(conn).Encode(map[string]string{
 			"action":   "REGISTER_ACK",
 			"drone_id": assignedID,
 		})
 
-		// 3. Inicia a gestão persistente desse socket
 		handleDroneConnection(conn, assignedID)
 
 	case "DISPATCH":
@@ -119,6 +118,8 @@ func handleIncomingConnection(conn net.Conn) {
 	}
 }
 
+// Assume o controle de um socket persistente de um drone recém-registrado,
+// processando atualizações de estado assíncronas (heartbeats e confirmações de término de missão).
 func handleDroneConnection(conn net.Conn, droneID string) {
 	d := &Drone{
 		ID:            droneID,
@@ -154,7 +155,6 @@ func handleDroneConnection(conn net.Conn, droneID string) {
 		d.LastHeartbeat = time.Now()
 
 		if update.Action == "HEARTBEAT" {
-			// Apenas para manter ativo no HealthCheck
 		} else if update.Action == "MISSION_COMPLETE" {
 			d.Status = "LIVRE"
 			fmt.Printf("[%s] ✅ %s concluiu a missão e está LIVRE.\n", base_id, droneID)
@@ -163,6 +163,8 @@ func handleDroneConnection(conn net.Conn, droneID string) {
 	}
 }
 
+// Responde à requisição síncrona do Broker para despacho. Em caso de sucesso
+// na alocação, delega a instrução do drone para uma goroutine separada.
 func handleBrokerDispatch(conn net.Conn, cmd GenericCommand) {
 	droneLivre := findFreeDrone()
 	if droneLivre != nil {
@@ -183,6 +185,8 @@ func handleBrokerDispatch(conn net.Conn, cmd GenericCommand) {
 	}
 }
 
+// Consulta de forma thread-safe (via RLock) o mapa de registros da frota
+// e retorna via TCP o status operacional de um drone específico requisitado pelo Broker.
 func handleBrokerStatus(conn net.Conn, cmd GenericCommand) {
 	droneMutex.RLock()
 	d, exists := base_drones[cmd.Target]
@@ -198,6 +202,8 @@ func handleBrokerStatus(conn net.Conn, cmd GenericCommand) {
 	}
 }
 
+// Varre o registro de drones em busca de uma unidade com status "LIVRE",
+// aplicando travamento mútuo (Lock) sobre a estrutura para executar a transição atômica para "OCUPADO".
 func findFreeDrone() *Drone {
 	droneMutex.Lock()
 	defer droneMutex.Unlock()
@@ -215,6 +221,8 @@ func findFreeDrone() *Drone {
 	return nil
 }
 
+// Serializa o payload de voo e o transmite através do socket TCP mantido com o drone.
+// Caso ocorra uma falha de rede na transmissão, o status do drone passa por rollback para "LIVRE".
 func executeMission(d *Drone, cmd GenericCommand) {
 	d.Mutex.Lock()
 	defer d.Mutex.Unlock()

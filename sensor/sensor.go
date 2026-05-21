@@ -10,17 +10,22 @@ import (
 	"time"
 )
 
+// Define a estrutura do payload JSON emitido pelo hardware,
+// encapsulando a tipagem da anomalia de rede, sua prioridade intrínseca
+// de atendimento e o identificador do setor de origem.
 type SensorEvent struct {
 	Type     string `json:"type"`
 	Priority int    `json:"priority"`
 	SectorID string `json:"sector_id"`
 }
 
+// Inicializa o ciclo de vida do sensor autônomo, provisionando a entropia
+// inicial, parseando os argumentos de injeção de dependência (topologia de rede)
+// e orquestrando um loop estocástico de geração de eventos de telemetria.
 func main() {
 	rand.Seed(time.Now().UnixNano())
 	sector_ID := os.Args[1]
 
-	// Divide a string recebida no Docker Compose em um array de endereços
 	brokers_addrs := strings.Split(os.Args[2], ",")
 
 	eventos_possiveis := []string{"EMBARCACAO_DERIVA", "BLOQUEIO_ROTA", "OBJETO_NAO_IDENTIFICADO"}
@@ -38,9 +43,11 @@ func main() {
 	}
 }
 
+// Implementa um mecanismo de resiliência ativo
+// para transmissão de pacotes. A função interage recursivamente com a lista de endpoints conhecidos;
+// em caso de falha de I/O no nó primário (timeout), o evento sofre roteamento progressivo para nós secundários.
 func sendToBrokerWithFailover(brokers []string, event SensorEvent) {
 	for i, addr := range brokers {
-		// Tenta conectar. Se falhar, o err não será nulo e ele vai para o próximo do loop
 		conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 		if err == nil {
 			defer conn.Close()

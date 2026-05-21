@@ -20,37 +20,32 @@ services:
 
   # ==========================================
   # DRONES (Worker Nodes)
+  #   O command manda a lista com as bases disponíveis no formato [BASE_IP]:[BASE_PORT]
   # ==========================================
   drone_11:
     build:
-      context: ./drone # Você precisará criar o diretório ./drone com o drone.go e um Dockerfile
-    command: ./drone ${base_1}:6000 # Argumento apontando para onde ele deve se registrar
-    depends_on:
-      - base_1 # Garante que o drone só suba depois da base
+      context: ./drone
+    command: ./drone ${base_1}:6000,${base_2}:6001
 
   drone_12:
     build:
       context: ./drone
-    command: ./drone ${base_1}:6001
-    depends_on:
-      - base_1
+    command: ./drone ${base_1}:6001,${base_2}:6001
 
   drone_21:
     build:
       context: ./drone
-    command: ./drone ${base_2}:6001
-    depends_on:
-      - base_2
+    command: ./drone ${base_2}:6001,${base_1}:6000
 
   drone_22:
     build:
       context: ./drone
-    command: ./drone ${base_2}:6001
-    depends_on:
-      - base_2        
+    command: ./drone ${base_2}:6001,${base_1}:6000     
 
   # ==========================================
   # BROKERS (GERENCIADORES DE SETOR)
+  #   PEERS: Lista dos outros brokers no formato [SETOR]|[BROKER_IP]:[BROKER_PORT]
+  #   BASES: Lista das bases no formato [BASE_IP]:[BASE_PORT]
   # ==========================================
   broker_1:
     build:
@@ -114,6 +109,7 @@ services:
 
   # ==========================================
   # SENSORES
+  #   O command manda lista dos setor correspondente e seus vizinhos
   # ==========================================
   sensor_1:
     build:
