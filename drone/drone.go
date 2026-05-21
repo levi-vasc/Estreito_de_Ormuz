@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// Command define o contrato do payload JSON utilizado para a troca
+// Define o contrato do payload JSON utilizado para a troca
 // bidirecional de instruções de controle e telemetria entre o drone e a base.
 type Command struct {
 	Action  string `json:"action"`
@@ -18,7 +18,7 @@ type Command struct {
 	DroneID string `json:"drone_id"`
 }
 
-// main inicializa o processo autônomo do drone, configurando o seed de entropia
+// Inicializa o processo autônomo do drone, configurando o seed de entropia
 // e iniciando um loop de resiliência ativo (client-side load balancing e failover)
 // que tenta estabelecer conexão com nós de base disponíveis estocasticamente.
 func main() {
@@ -47,7 +47,7 @@ func main() {
 	}
 }
 
-// runDroneCycle orquestra o ciclo de vida da sessão TCP com uma base operacional.
+// Orquestra o ciclo de vida da sessão TCP com uma base operacional.
 // Ele executa o handshake inicial de registro, provisiona o canal de keep-alive, e
 // atua como um consumer bloqueante (event loop) para despachar comandos remotos (RPCs).
 func runDroneCycle(baseAddr string) error {
@@ -91,7 +91,7 @@ func runDroneCycle(baseAddr string) error {
 	}
 }
 
-// startHeartbeat mantém a persistência da sessão enviando pacotes periódicos de telemetria
+// Mantém a persistência da sessão enviando pacotes periódicos de telemetria
 // de forma assíncrona para o socket da base. O ciclo de vida da goroutine é delimitado
 // pelo canal de cancelamento 'done'.
 func startHeartbeat(encoder *json.Encoder, droneID string, done <-chan struct{}) {
@@ -112,7 +112,7 @@ func startHeartbeat(encoder *json.Encoder, droneID string, done <-chan struct{})
 	}
 }
 
-// executeFlight bloqueia a rotina de consumo do socket para simular a latência inerente
+// Bloqueia a rotina de consumo do socket para simular a latência inerente
 // à execução da tarefa de campo. Ao término da latência simulada, transmite um ACK
 // de conclusão (callback) serializado de volta para a base.
 func executeFlight(encoder *json.Encoder, droneID string, targetSector string) error {
