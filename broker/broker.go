@@ -12,14 +12,14 @@ import (
 )
 
 // Isola os contadores lógicos da aplicação, garantindo
-// operações atômicas sobre os namespaces de rede e de missão.
+// operações atômicas no P2P e missões.
 type LogicalClocks struct {
 	P2PClock     int
 	MissionClock int
 	mutex        sync.Mutex
 }
 
-// Define o contrato do protocolo peer-to-peer para a negociação
+// Define o contrato do protocolo P2P para a negociação
 // de acesso distribuído aos recursos (exclusão mútua).
 type Message struct {
 	Type      string `json:"type"`
@@ -116,7 +116,7 @@ func main() {
 }
 
 // Sincroniza o relógio lógico local com base em eventos da rede,
-// assumindo o maior valor entre o relógio atual e o recebido, com incremento monotônico.
+// assumindo o maior valor entre o relógio atual e o recebido.
 func (lc *LogicalClocks) UpdateP2P(received int) int {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
@@ -348,7 +348,7 @@ func (b *Broker) startP2PServer() {
 	}
 }
 
-// Desserializa eventos do protocolo peer-to-peer e aplica
+// Desserializa eventos do protocolo P2P e aplica
 // as transições de estado para permissões (ACK), solicitações (REQ) e liberações (RELEASE).
 func (b *Broker) handleP2PConnection(conn net.Conn) {
 	defer conn.Close()

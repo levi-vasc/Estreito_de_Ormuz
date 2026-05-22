@@ -22,11 +22,6 @@ type Command struct {
 // e iniciando um loop de resiliência ativo (client-side load balancing e failover)
 // que tenta estabelecer conexão com nós de base disponíveis estocasticamente.
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Println("Uso: ./drone <BASE_ADDR1,BASE_ADDR2,...>")
-		return
-	}
-
 	bases := strings.Split(os.Args[1], ",")
 
 	rand.Seed(time.Now().UnixNano())
