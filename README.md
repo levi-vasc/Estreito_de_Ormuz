@@ -2,7 +2,28 @@
 
 ## 📋 Visão Geral
 
-O projeto implementa um **sistema distribuído para monitoramento marítimo no Estreito de Ormuz**, coordenando drones autônomos através de uma arquitetura com múltiplos componentes interconectados via TCP/JSON.
+O projeto implementa um **sistema distribuído de coordenação de drones autônomos** para monitoramento marítimo do Estreito de Ormuz. Implementa arquitetura P2P descentralizada com algoritmo **Ricart-Agrawala** para exclusão mútua distribuída, garantindo zero duplicação de alocação de recursos e priorização automática de requisições críticas.
+
+### Requisitos do Problema
+
+**Desafios Técnicos**:
+
+1. **Distribuição**: Sensores em múltiplos setores, brokers descentralizados, frotas de drones em várias bases
+2. **Concorrência**: Múltiplas requisições simultâneas de sensores/brokers competindo pelos drones limitados
+3. **Confiabilidade**: 
+   - Rede instável (timeouts, desconexões)
+   - Componentes falham (brokers caem, drones ficam offline)
+   - Nenhum drone pode ser alocado para 2+ requisições (exclusão mútua)
+4. **Priorização**: Eventos críticos (P3) devem ser atendidos antes dos normais (P1-P2)
+5. **Sem Ponto Único de Falha (SPOF)**: Se um broker morre, o sistema continua operando
+
+**Métricas de Sucesso**:
+
+1. **Zero duplicação**: Um drone nunca é alocado 2x simultaneamente
+2. **Zero perda de eventos**: Todos os eventos gerados chegam à fila (com recuperação em caso de falha)
+3. **Priorização**: Requisições críticas são processadas primeiro
+4. **Resiliência**: Falha de broker/drone não causa crash do sistema
+5. **Escalabilidade**: Adicionar brokers aumenta throughput linearmente
 
 ---
 
@@ -144,7 +165,7 @@ Se `Broker_1` cai:
 }
 ```
 
-* Algoritmo: Ricart-Agrawala (2-fases commit)
+* Algoritmo: **Ricart-Agrawala**
 
 #### **Broker → Base (Requisição de Drone)**
 
@@ -500,23 +521,6 @@ func executeMission(d *Drone, cmd GenericCommand) {
 }
 ```
 
-### Teste de Consistência sob Carga
-
-#### **Scenario: Múltiplas Requisições Concorrentes**
-
-```go
-// Simulação com 3 sensores gerando eventos simultâneos
-Sensor-1: EMBARCACAO_DERIVA (Prio 3) → Broker-1
-Sensor-2: BLOQUEIO_ROTA (Prio 2) → Broker-2
-Sensor-3: OBJETO_NAO_IDENTIFICADO (Prio 3) → Broker-1
-```
-
-**Comportamento esperado**:
-- Sensor-1 e Sensor-3 enfileirados em Broker-1
-- Sensor-2 enfileirado em Broker-2
-- Se ambos Broker-1 e Broker-2 em WAITING, Ricart-Agrawala decide quem entra CS
-- Requisições NUNCA são duplicadas (mesmo drone não alocado 2x)
-
 #### **Scenario: Falha Simultânea de Broker**
 
 ```
@@ -620,9 +624,9 @@ Drones no Setor: 🚁 Drone_2 (Base_2)
 --- Top 5 Requisições ---
 Pedido 26 | Prioridade 1 | Setor_1
 Pedido 25 | Prioridade 2 | Setor_5
-Pedido 26 | Prioridade 3 | Setor_3
-Pedido 26 | Prioridade 2 | Setor_2
-Pedido 26 | Prioridade 3 | Setor_4
+Pedido 28 | Prioridade 3 | Setor_3
+Pedido 24 | Prioridade 2 | Setor_2
+Pedido 29 | Prioridade 3 | Setor_4
 ===============================================
 ```
   1. Informa estado do broker (**Ocioso**, **Aguardando permissão** ou **Região crítica**)
@@ -657,53 +661,16 @@ Pedido 26 | Prioridade 3 | Setor_4
 
 ## Testes
 
-### Teste 1: Verificar Exclusão Mútua
-```bash
-# Enviar 3 eventos em rápida sucessão
-for i in {1..3}; do
-  echo '{"type":"EMBARCACAO_DERIVA","priority":3,"sector_id":"Setor_1"}' | nc localhost 7001
-  sleep 0.1
-done
+### Cenários
 
-# Verificar logs: apenas 1 drone alocado por vez
-docker-compose logs broker-1 | grep "DISPATCH ACEITO"
+* Falha de Broker
 ```
-
-### Teste 2: Falha de Broker
-```bash
-# 1. Sistema em funcionamento
-docker-compose up -d
-
-# 2. Enviar evento
-echo '{"type":"BLOQUEIO_ROTA","priority":2,"sector_id":"Setor_2"}' | nc localhost 7001
-
-# 3. Matar um broker
-docker-compose kill broker-1
-
-# 4. Enviar novo evento
-echo '{"type":"OBJETO_NAO_IDENTIFICADO","priority":1,"sector_id":"Setor_3"}' | nc localhost 7002
-
-# 5. Verificar que sistema continua
-docker-compose logs base-central | tail -20
-```
-
-## Diagnóstico
-
-Ver logs em tempo real:
-```bash
-docker-compose logs -f broker-1
-docker-compose logs -f base-central
-docker-compose logs -f sensor-setor-1
-```
-
-Parar tudo:
-```bash
-docker-compose down -v
+docker compose down broker_1
 ```
 
 ---
 
-## 📊 ATENDIMENTO AOS REQUISITOS
+## 📊 Atendimento aos Requisitos
 
 | Critério | Evidência |
 |----------|-----------|
@@ -719,18 +686,3 @@ docker-compose down -v
 | **Testes sob carga** | Scenario testing com requisições concorrentes, falhas simultâneas |
 | **Contêinerização** | Docker-compose pronto, múltiplas máquinas suportadas |
 | **Documentação** | Comentários detalhados em português, README com instruções |
-
----
-
-## 🎯 CONCLUSÃO
-
-O projeto implementa **todos os 10 critérios do barema** com uma arquitetura robusta:
-
-- ✅ **Sem ponto único de falha**: Brokers descentralizados com health check
-- ✅ **Protocolo robusto**: TCP/JSON com timeouts, ACKs e failover
-- ✅ **Concorrência distribuída**: Ricart-Agrawala com priorização
-- ✅ **Confiabilidade**: Filas distribuídas, replanejamento, tolerância a falhas
-- ✅ **Docker**: Contêinerização completa, testes documentados
-- ✅ **Documentação**: Comentários e README abrangentes
-
-**Nota esperada: 10/10 (ou próximo disso, dependendo de testes práticos em laboratório).**
