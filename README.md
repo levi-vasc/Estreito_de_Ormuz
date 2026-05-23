@@ -1,5 +1,20 @@
 # Infraestrutura Distribuída para Coordenação de Drones no Estreito de Ormuz
 
+O projeto implementa um **sistema distribuído** para monitoramento marítimo no Estreito de Ormuz, coordenando drones autônomos através de uma arquitetura com múltiplos componentes interconectados via TCP/JSON.
+
+---
+
+## Índice
+
+1. [📋 Visão Geral](#-visão-geral)
+2. [🏗️ Arquitetura](#-arquitetura)
+3. [📡 Protocolo de Comunicação](#-protocolo-de-comunicação)
+4. [🔐 Concorrência Distribuída](#-concorrência-distribuída)
+5. [📦 Confiabilidade da Solução](#-confiabilidade-da-solução)
+6. [📖 Instruções de Execução](#-instruções-de-execução)
+7. [Testes](#testes)
+8. [📊 Atendimento aos Requisitos](#-atendimento-aos-requisitos)
+
 ## 📋 Visão Geral
 
 O projeto implementa um **sistema distribuído de coordenação de drones autônomos** para monitoramento marítimo do Estreito de Ormuz. Implementa arquitetura P2P descentralizada com algoritmo **Ricart-Agrawala** para exclusão mútua distribuída, garantindo zero duplicação de alocação de recursos e priorização automática de requisições críticas.
@@ -27,7 +42,7 @@ O projeto implementa um **sistema distribuído de coordenação de drones autôn
 
 ---
 
-## 🏗️ Arquitetura da Solução
+# 🏗️ Arquitetura
 
 ### Componentes Implementados
 
@@ -113,7 +128,7 @@ Se `Broker_1` cai:
 
 ---
 
-## 📡 PROTOCOLO DE COMUNICAÇÃO
+## 📡 Protocolo de Comunicação
 
 ### APIs entre Componentes
 
