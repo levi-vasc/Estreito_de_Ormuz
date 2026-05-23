@@ -42,8 +42,6 @@ O projeto implementa um **sistema distribuído de coordenação de drones autôn
 
 ---
 
-## ⚙️ Arquitetura
-
 ### Componentes Implementados
 
 O sistema é composto por **4 componentes principais**:
