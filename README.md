@@ -6,13 +6,16 @@ O projeto implementa um **sistema distribuído** para monitoramento marítimo no
 
 ## Índice
 
-1. [📋 Visão Geral](#-visão-geral)
-3. [📡 Protocolo de Comunicação](#-protocolo-de-comunicação)
-4. [🔐 Concorrência Distribuída](#-concorrência-distribuída)
-5. [📦 Confiabilidade da Solução](#-confiabilidade-da-solução)
-6. [📖 Instruções de Execução](#-instruções-de-execução)
-7. [Testes](#testes)
-8. [📊 Atendimento aos Requisitos](#-atendimento-aos-requisitos)
+- [📋 Visão Geral](#-visão-geral)
+- [🧱 Arquitetura](#-arquitetura)
+- [📡 Protocolo de Comunicação](#-protocolo-de-comunicação)
+- [🔐 Concorrência Distribuída](#-concorrência-distribuída)
+- [📦 Confiabilidade](#-confiabilidade)
+- [📖 Instruções de Execução](#-instruções-de-execução)
+- [🧪 Testes](#-testes)
+- [📊 Atendimento aos Requisitos](#-atendimento-aos-requisitos)
+
+---
 
 ## 📋 Visão Geral
 
@@ -40,6 +43,8 @@ O projeto implementa um **sistema distribuído de coordenação de drones autôn
 5. **Escalabilidade**: Adicionar brokers aumenta throughput linearmente
 
 ---
+
+## 🧱 Arquitetura
 
 ### Componentes Implementados
 
@@ -348,7 +353,7 @@ Cenário: Broker-1 e Broker-2 requisitam drone simultaneamente
 
 Tempo   │ Broker-1          │ Broker-2
 ────────┼───────────────────┼───────────────────
-t0      │ REQ (Prio=3, C=1) │ REQ (Prio=2, C=1)
+t0      │ REQ (Prio=2, C=1) │ REQ (Prio=3, C=1)
 t1      │ WAITING           │ WAITING
 t2      │ Recebe ACK(B2)    │ Recebe ACK(B1)
 t3      │ WAITING (aguarda) │ B-1 maior prioridade?
@@ -414,7 +419,7 @@ Requisições de mesma prioridade são processadas por **clock lógico** (Lampor
 
 ---
 
-## 📦 Confiabilidade da Solução
+## 📦 Confiabilidade
 
 ### Fila Distribuída e Replanejamento
 
@@ -460,7 +465,7 @@ Se um novo drone se conecta à Base:
 ```go
 // base.go: handleDroneConnection
 base_drones[droneID] = d  // Novo drone adicionado
-// Próxima requisição de `findFreeDrone()` o encontra
+// Próxima requisição de findFreeDrone() o encontra
 ```
 
 ### Tolerância à Falha de Drone
@@ -671,13 +676,73 @@ Pedido 29 | Prioridade 3 | Setor_4
 
 ---
 
-## Testes
+## 🧪 Testes
 
-### Cenários
+### Falha de Brokers
 
-* Falha de Broker
+Se `broker_1` cai:
+   1. Sensor do `setor_1` se vincula a um peer vizinho (`broker_2` ou `broker_5`)
+   2. `broker_1` é retirado das regras de consenso dos peers
+
 ```
 docker compose down broker_1
+```
+```
+# Setor_2 log
+[Setor_2] 💀 BROKER MORTO: Setor_1 (timeout: 17.009650822s)
+
+# Sensor_1 log
+[Sensor Setor_1] ✅ OBJETO_NAO_IDENTIFICADO (Prio 3) enviado ao broker PRINCIPAL: 192.168.0.100:7001
+[Sensor Setor_1] ❌ Falha ao contatar broker 192.168.0.100:7001. Buscando vizinho...
+[Sensor Setor_1] ⚠️ FAILOVER: OBJETO_NAO_IDENTIFICADO (Prio 2) enviado ao broker SECUNDÁRIO: 192.168.0.100:7005
+```
+
+Retorno do `broker_1`:
+   1. Sensor do `setor_1` volta a enviar eventos a `broker_1`
+   2. `broker_1` retorna às regras de consenso
+
+```
+docker compose up -d broker_1
+```
+```
+# Setor_2 log
+[Setor_2] ♻️ BROKER RECUPERADO: Setor_1
+
+# Sensor_1 log
+# Sensor voltou a enviar para broker principal
+[Sensor Setor_1] ❌ Falha ao contatar broker 192.168.0.100:7001. Buscando vizinho...
+[Sensor Setor_1] ⚠️ FAILOVER: BLOQUEIO_ROTA (Prio 1) enviado ao broker SECUNDÁRIO: 192.168.0.100:7005
+[Sensor Setor_1] ✅ OBJETO_NAO_IDENTIFICADO (Prio 2) enviado ao broker PRINCIPAL: 192.168.0.100:7001 
+```
+
+Falha de `broker_1` e seus vizinhos:
+   1. Sensor do `setor_1` avisa sobre problema de conexão e que os eventos estão sendo perdidos.
+
+```
+docker compose down broker_1
+```
+
+### Falha de Bases
+
+Se `base_1` cai:
+   1. Drones associados a ela tenta reconectar por um período
+   2. Se a base não responder, se conecta por sorteio a outra base da sua lista
+
+```
+docker compose down base_1
+```
+```
+# Drone_11 log
+# Percebe-se que no final ele se conecta a outra base (porta 6001) e recebe um novo ID
+[Drone_1] 🚀 Decolando em direção ao Setor_5...
+[Drone_1] ✅ Missão em Setor_5 concluída. Retornando...
+❌ Conexão perdida com 192.168.0.100:6000: desconexão detectada no decoder
+⚠️ Iniciando protocolo de redistribuição em 3 segundos...
+🔄 Tentando conectar à base: 192.168.0.100:6000...
+❌ Conexão perdida com 192.168.0.100:6000: dial tcp 192.168.0.100:6000: connect: connection refused
+⚠️ Iniciando protocolo de redistribuição em 3 segundos...
+🔄 Tentando conectar à base: 192.168.0.100:6001...
+[Drone_4] ✅ Registrado com sucesso na base 192.168.0.100:6001!
 ```
 
 ---
