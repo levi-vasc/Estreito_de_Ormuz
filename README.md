@@ -7,7 +7,7 @@ O projeto implementa um **sistema distribuído** para monitoramento marítimo no
 ## Índice
 
 1. [📋 Visão Geral](#-visão-geral)
-2. [🏗️ Arquitetura](-arquitetura)
+2. [⚙️ Arquitetura](-arquitetura)
 3. [📡 Protocolo de Comunicação](#-protocolo-de-comunicação)
 4. [🔐 Concorrência Distribuída](#-concorrência-distribuída)
 5. [📦 Confiabilidade da Solução](#-confiabilidade-da-solução)
@@ -42,7 +42,7 @@ O projeto implementa um **sistema distribuído de coordenação de drones autôn
 
 ---
 
-## 🏗️ Arquitetura
+## ⚙️ Arquitetura
 
 ### Componentes Implementados
 
