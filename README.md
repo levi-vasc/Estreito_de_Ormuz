@@ -11,6 +11,7 @@ O projeto implementa um **sistema distribuído** para monitoramento marítimo no
 - [📡 Protocolo de Comunicação](#-protocolo-de-comunicação)
 - [🔐 Concorrência Distribuída](#-concorrência-distribuída)
 - [📦 Confiabilidade](#-confiabilidade)
+- [🗺️ Configuração de Ambiente](#-configuração-de-ambiente)
 - [📖 Instruções de Execução](#-instruções-de-execução)
 - [🧪 Testes](#-testes)
 - [📊 Atendimento aos Requisitos](#-atendimento-aos-requisitos)
@@ -76,7 +77,7 @@ O sistema é composto por **4 componentes principais**:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Estilo Arquitetural: **Arquitetura em Camadas P2P Descentralizada**
+### Estilo Arquitetural: Arquitetura em Camadas P2P Descentralizada
 
 - **P2P entre Brokers**: Cada broker negocia acesso exclusivo a drones com seus peers
 - **Cliente-Servidor Local**: Sensores → Broker e Broker → Base
@@ -120,21 +121,13 @@ if timeSinceLastSeen > PEER_TIMEOUT {
 }
 ```
 
-#### Teste de Cenário de Falha
-
-Se `Broker_1` cai:
-1. Sensores do setor 1 se vinculam a `Broker_2` (timeout + failover)
-2. `Broker_2` remove `Broker_1` das regras de consenso
-3. `Broker_3` continua operando independentemente
-4. Requisições de `Broker_2` e `Broker_3` procuram drones nas bases
-
 ---
 
 ## 📡 Protocolo de Comunicação
 
 ### APIs entre Componentes
 
-#### **Sensor → Broker**
+#### Sensor → Broker
 
 ```json
 // ENVIO (SensorEvent)
@@ -154,7 +147,7 @@ Se `Broker_1` cai:
 
 * Retry: Failover progressivo para próximos brokers na lista
 
-#### **Broker → Broker (P2P)**
+#### Broker → Broker (P2P)
 
 ```json
 // REQ_DRONE (Ricart-Agrawala Request)
@@ -184,7 +177,7 @@ Se `Broker_1` cai:
 
 * Algoritmo: **Ricart-Agrawala**
 
-#### **Broker → Base (Requisição de Drone)**
+#### Broker → Base (Requisição de Drone)
 
 ```json
 // DISPATCH REQUEST
@@ -208,7 +201,7 @@ Se `Broker_1` cai:
 }
 ```
 
-#### **Broker → Base (Status de Drone)**
+#### Broker → Base (Status de Drone)
 
 ```json
 // STATUS REQUEST
@@ -223,7 +216,7 @@ Se `Broker_1` cai:
 }
 ```
 
-#### **Base → Drone (Comando de Voo)**
+#### Base → Drone (Comando de Voo)
 
 ```json
 // FLY COMMAND
@@ -247,14 +240,14 @@ Se `Broker_1` cai:
 
 ### Tratamento de Falhas de Comunicação
 
-#### **Timeout em Requisições**
+#### Timeout em Requisições
 ```go
 conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
 ```
 - Todas as conexões TCP têm timeout fixo de 2-3 segundos
 - Falha de conexão = drone não alocado naquela base
 
-#### **ACK + Retransmissão** (Ricart-Agrawala)
+#### ACK + Retransmissão (Ricart-Agrawala)
 ```go
 //  broker.go: executeDistributedExclusion
 for id := range b.Peers {
@@ -268,7 +261,7 @@ for id := range b.Peers {
 }
 ```
 
-#### **Retry com Backoff Progressivo**
+#### Retry com Backoff Progressivo
 ```go
 //  broker.go: requestDroneToBases
 maxRetries := 10
@@ -284,7 +277,7 @@ for retryCount < maxRetries {
 }
 ```
 
-#### **Monitoramento de Timeout de Missão**
+#### Monitoramento de Timeout de Missão
 ```go
 //  broker.go: startMissionMonitor
 if elapsed > mission.DroneTimeout {  // 30 segundos padrão
@@ -299,16 +292,16 @@ if elapsed > mission.DroneTimeout {  // 30 segundos padrão
 
 ## 🔐 Concorrência Distribuída
 
-### Exclusão Mútua Distribuída: **Algoritmo de Ricart-Agrawala**
+### Exclusão Mútua Distribuída: Algoritmo de Ricart-Agrawala
 
-#### **Máquina de Estados do Broker**
+#### Máquina de Estados do Broker
 
 ```
 IDLE ──→ WAITING ──→ IN_CS ──→ IDLE
          (aguarda)  (aloca)   (libera)
 ```
 
-#### **Implementação**
+#### Implementação
 
 * Fase 1: Request
 ```go
@@ -346,7 +339,7 @@ for _, pReq := range b.PendingQueue {
 }
 ```
 
-#### **Comparação com Requisições Concorrentes**
+#### Comparação com Requisições Concorrentes
 
 ```
 Cenário: Broker-1 e Broker-2 requisitam drone simultaneamente
@@ -368,7 +361,7 @@ t7      │ IDLE              │ AGUARDA ACK
 ```go
 //  broker.go: handleRequest
 needsToWait := b.State == "IN_CS" || (b.State == "WAITING" &&
-    (myPriority > incomingReq.Priority ||  // Maior prioridade = cede
+    (myPriority < incomingReq.Priority ||  // Maior prioridade (1 = maior, 3 = menor) = cede
         (myPriority == incomingReq.Priority && 
          b.CurrentReq.Clock < incomingReq.Clock) ||  // Clock menor = pediu primeiro
         (myPriority == incomingReq.Priority && 
@@ -399,7 +392,7 @@ Garantia: Apenas **um** broker consegue transicionar um drone de `LIVRE → OCUP
 
 ### Priorização de Requisições
 
-#### **Fila Global Ordenada por Prioridade + Timestamp**
+#### Fila Global Ordenada por Timestamp
 
 ```go
 // broker.go: startStatusLogger
@@ -411,7 +404,7 @@ sort.Slice(allRequests, func(i, j int) bool {
 })
 ```
 
-#### **Processamento FIFO dentro de mesma prioridade**
+#### Processamento FIFO dentro de mesma prioridade
 
 Requisições de mesma prioridade são processadas por **clock lógico** (Lamport):
 - Broker que pedir primeiro (menor clock) sai primeiro
@@ -423,7 +416,7 @@ Requisições de mesma prioridade são processadas por **clock lógico** (Lampor
 
 ### Fila Distribuída e Replanejamento
 
-#### **Estrutura de Fila**
+#### Estrutura de Fila
 
 ```go
 //  broker.go
@@ -431,7 +424,7 @@ PendingQueue []Message  // Fila local de espera
 GlobalRequests map[string]Message  // Fila global distribuída
 ```
 
-#### **Enfileiramento Automático**
+#### Enfileiramento Automático
 
 ```go
 //  broker.go: handleRequest
@@ -443,7 +436,7 @@ if needsToWait {
 }
 ```
 
-#### **Processamento da Fila**
+#### Processamento da Fila
 
 ```go
 //  broker.go: releaseSection
@@ -455,11 +448,11 @@ for _, pReq := range b.PendingQueue {
 b.PendingQueue = []Message{}  // Limpa fila
 ```
 
-#### **Replanejamento ao Adicionar Novo Drone**
+#### Replanejamento ao Adicionar Novo Drone
 
 Se um novo drone se conecta à Base:
-1. Base registra novo drone com status LIVRE
-2. Broker que está em WAITING (fila) prossegue normalmente
+1. Base registra novo drone com status `LIVRE`
+2. Broker que está em `WAITING` (fila) prossegue normalmente
 3. Ao chamar `findFreeDrone()`, o novo drone está disponível
 
 ```go
@@ -486,7 +479,7 @@ for {
 }
 ```
 
-#### **Health Check com Timeout**
+#### Health Check com Timeout
 
 ```go
 //  base.go
@@ -504,7 +497,7 @@ func startDroneHealthCheck() {
 }
 ```
 
-#### **Replanejamento Automático**
+#### Replanejamento Automático
 
 ```go
 //  broker.go
@@ -526,7 +519,7 @@ func waitForDroneReturnAndNotify(...) {
 }
 ```
 
-#### **Rollback de Alocação Falha**
+#### Rollback de Alocação Falha
 
 ```go
 //  base.go
@@ -538,33 +531,101 @@ func executeMission(d *Drone, cmd GenericCommand) {
 }
 ```
 
-#### **Scenario: Falha Simultânea de Broker**
-
-```
-t0: Broker-1 falha (power off)
-t1: Broker-2 em WAITING, aguardando ACK de Broker-1
-t2: Health check (5s) detecta timeout de Broker-1
-t3: Broker-1 removido de PendingAcks
-t4: Condition Variable dispara → Broker-2 entra CS
-t5: Requisição de Broker-2 é processada normalmente
-```
 
 ---
 
-## 📖 Instruções de Execução
+## 🗺️ Configuração de Ambiente
 
 ### Requisitos
 - Go 1.21+
 - Docker + Docker Compose
 - Máquina Windows/Linux
 
+### Estrutura Docker-Compose
+
+O `docker-compose.yml` é um arquivo de configuração que orquestra a compilação e execução de múltiplos serviços simuntaneamente. 
+Sendo assim, o usuário não precisa subir vários serviços por linhas de comando individuais.
+
+#### Bases
+
+```
+base_1:
+    build: 
+      context: ./base
+    container_name: base_1
+    command: ./base Base_1 6000
+    ports:
+      - "6000:6000"
+```
+
+* Sintaxe do comando: `./base [Base_ID] [Porta]`
+* Argumentos:
+   * `Base_ID`: Identificador único da base
+   * `Porta`: Porta TCP em que a base escutará as conexões
+
+#### Drones
+
+```
+drone_11:
+    build:
+      context: ./drone
+    command: ./drone ${base_1}:6000,${base_2}:6001
+```
+
+* Sintaxe do comando: `./drone [BASE_1_IP][PORTA],[BASE_2_IP][PORTA],...`
+* Argumento: Uma lista separada por vírgulas contendo o endereço e a porta de todas as bases disponíveis no sistema.
+ 
+#### Brokers
+
+```
+broker_1:
+    build:
+      context: ./broker
+    container_name: broker_1
+    command: ./broker Setor_1 5001 7001
+    ports:
+      - "5001:5001"
+      - "7001:7001"
+    environment:
+      - PEERS=Setor_2|${broker_2}:5002,Setor_3|${broker_3}:5003,Setor_4|${broker_4}:5004,Setor_5|${broker_5}:5005
+      - BASES=${base_1}:6000,${base_2}:6001
+```
+
+* Sintaxe do comando: `./broker [SETOR_ID] [PORTA_1] [PORTA_2]`
+* Argumento: Uma lista separada por vírgulas contendo o endereço e a porta de todas as bases disponíveis no sistema.
+
+* Variáveis de ambiente (`environment`):
+   * `PEERS`: Lista de conectividade com os outros brokers do sistema no formato `[Nome_do_Setor]|[BROKER_IP]:[PORTA]`, separados por vírgula. Garante a malha de comunicação entre os setores.
+   * `BASES`: Lista das bases associadas no formato `[BASE_IP]:[PORTA]`, separadas por vírgula.
+ 
+#### Sensores
+
+```
+sensor_1:
+    build:
+      context: ./sensor
+    container_name: sensor_1
+    command: ./sensor Setor_1 ${broker_1}:7001,${broker_5}:7005,${broker_2}:7002
+```
+
+* Sintaxe do comando: `./sensor [Setor_Atual] [BROKER_PRINCIPAL_IP]:[PORTA],[BROKER_VIZINHO_IP]:[PORTA]`
+* Argumentos:
+   * `Setor_Atual`: O setor onde o sensor está fisicamente alocado (ex: Setor_1).
+   * Lista de Brokers: O primeiro endereço deve ser o do broker responsável pelo setor atual, seguido pelos endereços dos brokers dos setores vizinhos (separados por vírgula) para fins de encaminhamento.
+
+---
+
+## 📖 Instruções de Execução
+
 ### Execução com Docker Compose
 
 É possível executar todo o sistema de maneira simples com o **docker compose**.
+
 * Uma máquina: No diretório do projeto, execute o seguinte comando:
 ```
 docker compose up -d --build
 ```
+
 * Múltiplas máquinas: Neste caso, é interessante editar o docker compose para evitar a duplicação de quaisquer entidades. Por exemplo, dividir os serviços de drones entre PC A e o PC B.
 
 **Arquivo original:**
